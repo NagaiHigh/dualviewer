@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>同時視聴アシスト</title>
+<style>
+:root{
+  --bg:#0e0e10; --bar:#18181b; --fg:#efeff1; --muted:#adadb8; --line:#2f2f35;
+  --btn:#2f2f35; --tw:#9146ff; --yt:#ff0033; --ex:#2fa36b;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+  font:14px/1.4 system-ui,"Segoe UI","Hiragino Sans","Meiryo",sans-serif}
+body{display:flex;flex-direction:column}
+
+#bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:6px 10px;
+  background:var(--bar);border-bottom:1px solid var(--line)}
+body.barhidden #bar, body.barhidden .exbar{display:none}
+label{display:flex;gap:4px;align-items:center;color:var(--muted)}
+input{background:var(--bg);color:var(--fg);border:1px solid var(--line);
+  border-radius:4px;padding:4px 6px;font:inherit;min-width:0}
+#ch{width:11em} #yt{width:22em;max-width:60vw}
+button,select{background:var(--btn);color:var(--fg);border:1px solid var(--line);
+  border-radius:4px;padding:4px 10px;cursor:pointer;font:inherit}
+button:hover,select:hover{border-color:var(--muted)}
+button:disabled{opacity:.4;cursor:default}
+.toggle,.vbtn{opacity:.55}
+.toggle.on,.vbtn.on{opacity:1}
+.vbtn[data-v=twitch].on{background:var(--tw)}
+.vbtn[data-v=youtube].on{background:var(--yt)}
+.toggle[data-k=ex].on{background:var(--ex)}
+.toggle[data-k=tw].on{background:var(--tw)}
+.toggle[data-k=yt].on{background:var(--yt)}
+.spacer{flex:1}
+#msg{color:#ffb4b4;font-size:12px}
+
+#showbar{position:fixed;top:4px;right:4px;z-index:9;display:none;opacity:.4;padding:2px 8px}
+#showbar:hover{opacity:1}
+body.barhidden #showbar{display:block}
+
+#warn{display:none;background:#5c1d1d;padding:6px 10px}
+body.isfile #warn{display:block}
+
+/* ---- レイアウト ---- */
+#main{flex:1;display:flex;min-height:0}
+#colmain{display:flex;flex-direction:column;min-width:200px;min-height:0;flex:none}
+.flex{flex:1 !important}
+.hidden{display:none !important}
+.pane{display:flex;flex-direction:column;min-width:200px;min-height:0;flex:none;position:relative}
+#colmain .pane{min-height:120px}
+.pane[data-k=ex]{border-top:3px solid var(--ex)}
+.pane[data-k=tw]{border-top:3px solid var(--tw)}
+.pane[data-k=yt]{border-top:3px solid var(--yt)}
+.pane iframe,.pane video{flex:1;border:0;width:100%;min-height:0;background:#000;display:block}
+.pane .empty{flex:1;display:flex;align-items:center;justify-content:center;
+  padding:16px;text-align:center;color:var(--muted)}
+.std.has-src .empty{display:none}
+.std:not(.has-src) iframe{display:none}
+
+/* EX枠: data-mode = none / url / cap */
+.exbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 6px;
+  background:var(--bar);border-bottom:1px solid var(--line)}
+#exurl{flex:1;min-width:10em}
+.pane[data-k=ex] iframe,.pane[data-k=ex] video{display:none}
+.pane[data-k=ex][data-mode=url] iframe{display:block}
+.pane[data-k=ex][data-mode=cap] video{display:block}
+.pane[data-k=ex][data-mode=url] .empty,.pane[data-k=ex][data-mode=cap] .empty{display:none}
+#exfit{display:none}
+.pane[data-k=ex][data-mode=cap] #exfit{display:inline-block}
+
+.vsplit{width:6px;flex:none;cursor:col-resize;background:var(--line);touch-action:none}
+.hsplit{height:6px;flex:none;cursor:row-resize;background:var(--line);touch-action:none}
+.vsplit:hover,.hsplit:hover,.drag{background:var(--muted) !important}
+body.dragging{user-select:none}
+body.dragging iframe,body.dragging video{pointer-events:none}
+
+/* ---- 使い方 ---- */
+#help{max-width:760px;width:calc(100% - 32px);max-height:calc(100% - 32px);
+  background:var(--bar);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:0}
+#help::backdrop{background:rgba(0,0,0,.6)}
+#help .head{position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;
+  padding:10px 16px;background:var(--bar);border-bottom:1px solid var(--line)}
+#help .head h2{margin:0;font-size:16px}
+#help .body{padding:4px 20px 20px}
+#help h3{font-size:15px;margin:20px 0 6px;padding-left:8px;border-left:3px solid var(--muted)}
+#help p,#help li{color:#d6d6dc}
+#help ul,#help ol{padding-left:1.4em;margin:6px 0}
+#help li{margin:3px 0}
+#help code{background:var(--bg);padding:1px 5px;border-radius:3px;font-size:12px}
+#help .note{color:var(--muted);font-size:12px}
+
+/* ---- スマホなど狭い画面は縦に積む ---- */
+@media (max-width:800px){
+  html,body{height:auto}
+  body{display:block}
+  #main,#colmain{display:block}
+  .pane{width:auto !important;height:auto !important;min-width:0}
+  .pane[data-k=player] iframe,.pane[data-k=player] .empty,
+  .pane[data-k=ex] iframe,.pane[data-k=ex] video,.pane[data-k=ex] .empty{flex:none;aspect-ratio:16/9;height:auto}
+  .pane[data-k=tw],.pane[data-k=yt]{height:70vh !important}
+  .vsplit,.hsplit{display:none !important}
+}
+</style>
+</head>
+<body>
+<div id="warn">このページはローカルファイル（file://）では動きません。URL で開いてください。</div>
+
+<div id="bar">
+  <label>Twitch <input id="ch" type="text" placeholder="チャンネル名（Enterで反映）"></label>
+  <label>YouTube <input id="yt" type="text" placeholder="配信ページのURL（Enterで反映）"></label>
+  <button class="vbtn" data-v="twitch">Twitch映像</button>
+  <button class="vbtn" data-v="youtube">YouTube映像</button>
+  <button class="toggle" data-k="ex">EX枠</button>
+  <button class="toggle" data-k="tw">Twitchコメント</button>
+  <button class="toggle" data-k="yt">YouTubeコメント</button>
+  <span class="spacer"></span>
+  <span id="msg"></span>
+  <button id="openhelp">？ 使い方</button>
+  <button id="hidebar" title="バーを隠す">▲</button>
+</div>
+<button id="showbar" title="バーを表示">▼</button>
+
+<div id="main">
+  <div id="colmain">
+    <div class="pane std" data-k="player">
+      <iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen
+              referrerpolicy="strict-origin-when-cross-origin"></iframe>
+      <div class="empty"></div>
+    </div>
+    <div class="hsplit" id="hsplit"></div>
+    <div class="pane" data-k="ex" data-mode="none">
+      <div class="exbar">
+        <input id="exurl" type="text" placeholder="表示したいページのURL（YouTube・Twitch はそのまま貼れます）">
+        <button id="excap" title="別のタブ・ウィンドウをEX枠に映す">ミラー</button>
+        <select id="exfit" title="映し方">
+          <option value="contain">全体を収める</option>
+          <option value="cover">枠いっぱい</option>
+        </select>
+        <button id="exstop" disabled>停止</button>
+      </div>
+      <iframe id="exframe" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen
+              referrerpolicy="strict-origin-when-cross-origin"></iframe>
+      <video id="exvideo" autoplay muted playsinline></video>
+      <div class="empty">URL を入れて Enter で表示するか、<br>「ミラー」で別のタブ・ウィンドウを映せます</div>
+    </div>
+  </div>
+  <div class="vsplit" data-k="tw"></div>
+  <div class="pane std" data-k="tw">
+    <iframe referrerpolicy="strict-origin-when-cross-origin"></iframe>
+    <div class="empty">上のバーに Twitch のチャンネル名を入れてください</div>
+  </div>
+  <div class="vsplit" data-k="yt"></div>
+  <div class="pane std" data-k="yt">
+    <iframe referrerpolicy="strict-origin-when-cross-origin"></iframe>
+    <div class="empty">上のバーに YouTube の配信ページのURLを貼ってください<br>（配信ごとにURLが変わります）</div>
+  </div>
+</div>
+
+<dialog id="help">
+  <div class="head">
+    <h2>使い方</h2>
+    <button id="closehelp">閉じる</button>
+  </div>
+  <div class="body">
+    <h3>このツールについて</h3>
+    <p>「同時視聴アシスト」は、永井浩二チャンネルの Twitch・YouTube 同時配信を、1 画面でまとめて見るためのツールです。
+    配信映像と、Twitch・YouTube 両方のコメント欄を並べて表示します。好きなページや別のウィンドウを映せる「EX枠」も使えます。</p>
+
+    <h3>基本の使い方</h3>
+    <ol>
+      <li><b>Twitch</b> にチャンネル名を入れます（最初から <code>nagaikouji074</code> が入っています）。</li>
+      <li><b>YouTube</b> に配信ページの URL を貼ります。<br>
+        例: <code>https://www.youtube.com/watch?v=…</code>、<code>https://youtu.be/…</code><br>
+        <span class="note">YouTube の URL は配信ごとに変わります。チャンネルの URL（<code>youtube.com/@…/live</code> など）では配信を特定できないので、配信ページを開いてその URL を貼ってください。</span></li>
+      <li>Enter を押すと反映されます（入力欄から離れても反映されます）。</li>
+    </ol>
+
+    <h3>画面の切り替え</h3>
+    <ul>
+      <li>「Twitch映像」「YouTube映像」のボタンで、どちらの映像を出すか切り替えます。表示中の方をもう一度押すと映像を隠します。片方しか入力していないときは、入力した方の映像を出します。</li>
+      <li>「EX枠」「Twitchコメント」「YouTubeコメント」のボタンで、それぞれ表示・非表示を切り替えます。</li>
+      <li>枠の間の線をドラッグすると、幅や高さを変えられます。</li>
+      <li>▲ で上のバーを隠し、右上の ▼ で戻します。EX枠の入力欄やボタンも一緒に隠れます。</li>
+      <li>設定（チャンネル名・表示状態・枠の大きさなど）はこのブラウザに保存されます。YouTube の URL は配信ごとに変わるので保存しません。</li>
+    </ul>
+
+    <h3>EX枠</h3>
+    <p>映像の下に、好きなものを表示できる枠です。実況しながらの同時視聴などにどうぞ。
+    上のバーの「EX枠」ボタンで表示します。
+    メインの映像を隠すと（表示中の映像ボタンをもう一度押す）、EX枠が縦いっぱいに広がります。</p>
+    <p><b>URL を表示する</b></p>
+    <ul>
+      <li>EX枠の入力欄に URL を入れて Enter を押します（入力欄から離れても反映されます）。</li>
+      <li>YouTube の動画 URL や、Twitch のチャンネル・アーカイブ・クリップの URL は、普段の URL をそのまま貼れば表示できます。</li>
+      <li>それ以外のページは、埋め込みを許可しているものだけ表示できます。真っ白になる・エラーが出る場合は、下の「ミラー」を使ってください。</li>
+    </ul>
+    <p><b>ミラー</b>（別のタブ・ウィンドウを映す。埋め込みが禁止されている中継などに）</p>
+    <ol>
+      <li>見たい中継を、別のタブかウィンドウで開いておきます。</li>
+      <li>EX枠の「ミラー」を押し、出てきた画面で中継のタブかウィンドウを選んで「共有」を押します。</li>
+      <li>EX枠に映ります。元のウィンドウが後ろに隠れても映り続けます。</li>
+    </ol>
+    <ul>
+      <li>映っているのは映像だけです。一時停止や音量などの操作は、元のタブ・ウィンドウで行ってください。音も元のタブから出ます。</li>
+      <li>映している間は、「全体を収める」「枠いっぱい」（端が切れる代わりに余白なし）で映し方を切り替えられます。</li>
+      <li>元のウィンドウを最小化すると映像が止まります。</li>
+      <li>映像はこのパソコンの中で表示しているだけで、どこにも送信されません。</li>
+      <li>止めるときは「停止」か、ブラウザの「共有を停止」を押します。EX枠を隠したときも止まります。</li>
+      <li>パソコンの Chrome・Edge・Firefox で使えます（スマホでは使えません）。</li>
+    </ul>
+
+    <h3>小技: 映像を最前面に浮かせる</h3>
+    <p>Chrome・Edge では、動画の上で右クリックを 2 回するとブラウザのメニューが出て、「ピクチャー イン ピクチャー」で映像を小窓にして最前面に浮かせられます。
+    YouTube のプレイヤーにある小窓ボタンでも同じことができます。</p>
+
+    <h3>よくある質問</h3>
+    <ul>
+      <li><b>コメントを書き込めない</b><br>ブラウザの設定によって、埋め込みのコメント欄がログイン状態にならないことがあります。書き込むときは Twitch・YouTube の公式ページからお願いします。</li>
+      <li><b>YouTube のコメントが出ない</b><br>URL が今の配信のものか確認してください。配信終了後や配信の設定によっては表示されないことがあります。</li>
+      <li><b>EX枠の動画に「埋め込みが無効です」と出る</b><br>配信元が埋め込みを禁止しています。「ミラー」を使ってください。</li>
+      <li><b>スマホで見たい</b><br>縦に並べて表示します。「ミラー」はスマホでは使えません。</li>
+    </ul>
+
+    <h3>ご注意</h3>
+    <ul>
+      <li>Twitch・YouTube とは関係のない非公式ツールです。両サービス公式の埋め込みを並べて表示しているだけです。</li>
+      <li>このツールはコメントや個人情報を集めていません。設定はお使いのブラウザの中にだけ保存されます。</li>
+    </ul>
+  </div>
+</dialog>
+
+<script>
+// 何も指定せずに開いたときの Twitch チャンネル
+const DEFAULT_CH = 'nagaikouji074';
+const MIN_W = 200, MIN_H = 120;
+const CH_URL_MSG = 'チャンネルのURLでは配信を特定できません。配信ページを開いて、そのURL（watch?v=… など）を貼ってください';
+
+const $ = s => document.querySelector(s);
+const pane = k => document.querySelector(`.pane[data-k="${k}"]`);
+const HOST = location.hostname;
+const P = encodeURIComponent(HOST);
+
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('dsv.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('dsv.' + k, JSON.stringify(v)); } catch {} },
+};
+
+// ---------- 入力の読み取り ----------
+function twName(s) {
+  s = (s || '').trim();
+  const m = s.match(/twitch\.tv\/(?:popout\/)?(\w+)/i);
+  return (m ? m[1] : s).toLowerCase().replace(/[^a-z0-9_]/g, '');
+}
+function ytId(s) {
+  s = (s || '').trim();
+  if (/^[\w-]{11}$/.test(s)) return s;
+  try {
+    const u = new URL(s);
+    if (u.hostname === 'youtu.be') return u.pathname.slice(1, 12);
+    const v = u.searchParams.get('v');
+    if (v) return v;
+    const m = u.pathname.match(/\/(?:live|embed|shorts)\/([\w-]{11})/);
+    if (m) return m[1];
+  } catch {}
+  return '';
+}
+const isYtChannelUrl = s => /youtube\.com\/(@|channel\/|c\/|user\/)/i.test(s);
+
+// EX枠に入れられた URL → 表示用の URL
+function exTarget(raw) {
+  raw = (raw || '').trim();
+  if (!raw) return { err: 'URLを入れてください' };
+  let u;
+  try { u = new URL(raw); } catch {
+    try { u = new URL('https://' + raw); } catch { return { err: 'URLとして読み取れませんでした' }; }
+  }
+  if (!/^https?:$/.test(u.protocol)) return { err: 'http:// か https:// で始まるURLだけ表示できます' };
+  const h = u.hostname.replace(/^(www|m)\./, '');
+  const clip = slug => ({ src: `https://clips.twitch.tv/embed?clip=${encodeURIComponent(slug)}&parent=${P}`, trusted: true });
+
+  if (h === 'youtube.com' || h === 'youtu.be' || h === 'youtube-nocookie.com') {
+    if (isYtChannelUrl(u.href)) return { err: CH_URL_MSG };
+    const id = ytId(u.href);
+    if (id) return { src: `https://www.youtube.com/embed/${id}?autoplay=1&playsinline=1`, trusted: true };
+    return { err: 'YouTube の動画URLを読み取れませんでした' };
+  }
+  if (h === 'clips.twitch.tv') {
+    const slug = u.searchParams.get('clip') || u.pathname.split('/').filter(Boolean).pop();
+    if (slug && slug !== 'embed') return clip(slug);
+  }
+  if (h === 'player.twitch.tv') {
+    u.searchParams.set('parent', HOST);
+    return { src: u.href, trusted: true };
+  }
+  if (h === 'twitch.tv') {
+    const parts = u.pathname.split('/').filter(Boolean);
+    if (parts[0] === 'videos' && parts[1]) return { src: `https://player.twitch.tv/?video=${encodeURIComponent(parts[1])}&parent=${P}`, trusted: true };
+    if (parts[1] === 'clip' && parts[2]) return clip(parts[2]);
+    if (parts[0] === 'popout' && parts[1]) parts.shift();
+    const name = twName(parts[0] || '');
+    if (name) return { src: `https://player.twitch.tv/?channel=${name}&parent=${P}`, trusted: true };
+  }
+  return { src: u.href, trusted: false };
+}
+
+// ---------- 状態 ----------
+const q = new URLSearchParams(location.search);
+const state = {
+  ch: twName(q.get('ch') || store.get('ch', DEFAULT_CH)),
+  yt: ytId(q.get('yt') || ''),          // 動画IDは配信ごとに変わるので保存しない
+  player: q.get('player') || store.get('player', 'twitch'),
+  show: Object.assign({ player: true, ex: false, tw: true, yt: true }, store.get('show', {})),
+  w: Object.assign({ tw: 340, yt: 340 }, store.get('w', {})),
+  h: Object.assign({ ex: 320 }, store.get('h', {})),
+  exUrl: store.get('exurl', ''),
+  ex: null,            // URL表示中の { src, trusted }
+  cap: null,           // 画面キャプチャ中の MediaStream
+};
+if (!['twitch', 'youtube'].includes(state.player)) state.player = 'twitch';
+
+// 選んだ方が未入力なら、入力されている方の映像を出す
+function effPlayer() {
+  if (state.player === 'youtube' && !state.yt && state.ch) return 'twitch';
+  if (state.player === 'twitch' && !state.ch && state.yt) return 'youtube';
+  return state.player;
+}
+
+function flash(t) {
+  $('#msg').textContent = t;
+  clearTimeout(flash.t);
+  flash.t = setTimeout(() => $('#msg').textContent = '', 6000);
+}
+
+// ---------- 表示 ----------
+function setSrc(k, src) {
+  const p = pane(k), f = p.querySelector('iframe');
+  p.classList.toggle('has-src', !!src);
+  if (src && f.getAttribute('src') !== src) f.setAttribute('src', src);
+  if (!src && f.hasAttribute('src')) f.removeAttribute('src');
+}
+
+function renderSources() {
+  setSrc('tw', state.ch ? `https://www.twitch.tv/embed/${state.ch}/chat?parent=${P}&darkpopout` : '');
+  setSrc('yt', state.yt ? `https://www.youtube.com/live_chat?v=${state.yt}&embed_domain=${P}&dark_theme=1` : '');
+
+  const pl = effPlayer();
+  let src = '';
+  if (pl === 'twitch' && state.ch) src = `https://player.twitch.tv/?channel=${state.ch}&parent=${P}`;
+  if (pl === 'youtube' && state.yt) src = `https://www.youtube.com/embed/${state.yt}?autoplay=1&playsinline=1`;
+  pane('player').querySelector('.empty').textContent =
+    'Twitch のチャンネル名か YouTube の配信URLを入れると映像が出ます';
+  // 非表示のときは読み込みを外す（裏で音が鳴り続けないように）
+  setSrc('player', state.show.player ? src : '');
+}
+
+function renderEx() {
+  const p = pane('ex'), f = $('#exframe');
+  let mode = 'none';
+  if (state.cap) mode = 'cap';
+  else if (state.ex && state.show.ex) mode = 'url';
+  p.dataset.mode = mode;
+
+  if (mode === 'url') {
+    const want = state.ex.trusted ? null : 'allow-scripts allow-same-origin allow-popups allow-forms allow-presentation';
+    if (f.getAttribute('sandbox') !== want) {
+      f.removeAttribute('src');
+      if (want) f.setAttribute('sandbox', want); else f.removeAttribute('sandbox');
+    }
+    if (f.getAttribute('src') !== state.ex.src) f.setAttribute('src', state.ex.src);
+  } else if (f.hasAttribute('src')) {
+    f.removeAttribute('src');
+  }
+  $('#exstop').disabled = mode === 'none';
+}
+
+function renderLayout() {
+  const s = state.show;
+  const mainOn = s.player || s.ex;
+  const top = [mainOn && 'main', s.tw && 'tw', s.yt && 'yt'].filter(Boolean);
+
+  $('#colmain').classList.toggle('hidden', !mainOn);
+  $('#colmain').classList.toggle('flex', top[0] === 'main');
+  pane('player').classList.toggle('hidden', !s.player);
+  pane('player').classList.toggle('flex', s.player);
+  pane('ex').classList.toggle('hidden', !s.ex);
+  pane('ex').classList.toggle('flex', !s.player);
+  pane('ex').style.height = s.player ? state.h.ex + 'px' : '';
+  $('#hsplit').classList.toggle('hidden', !(s.player && s.ex));
+
+  ['tw', 'yt'].forEach(k => {
+    const p = pane(k), first = top[0] === k;
+    p.classList.toggle('hidden', !s[k]);
+    p.classList.toggle('flex', first);
+    p.style.width = first ? '' : state.w[k] + 'px';
+    document.querySelector(`.vsplit[data-k="${k}"]`).classList.toggle('hidden', !s[k] || first);
+  });
+  document.querySelectorAll('.toggle').forEach(b => b.classList.toggle('on', !!s[b.dataset.k]));
+  const pl = effPlayer();
+  document.querySelectorAll('.vbtn').forEach(b => b.classList.toggle('on', s.player && pl === b.dataset.v));
+}
+
+function urlParams() {
+  const u = new URL(location.href);
+  u.search = '';
+  if (state.ch) u.searchParams.set('ch', state.ch);
+  if (state.yt) u.searchParams.set('yt', state.yt);
+  u.searchParams.set('player', state.player);
+  return u.toString();
+}
+
+function apply() {
+  state.ch = twName($('#ch').value);
+  const raw = $('#yt').value.trim();
+  state.yt = ytId(raw);
+  if (raw && !state.yt) flash(isYtChannelUrl(raw) ? CH_URL_MSG : 'YouTube のURLから配信を読み取れませんでした');
+  $('#ch').value = state.ch;
+  if (state.yt) $('#yt').value = `https://www.youtube.com/watch?v=${state.yt}`;
+  store.set('ch', state.ch);
+  history.replaceState(null, '', urlParams());
+  renderSources();
+  renderLayout();
+}
+
+// ---------- EX枠 ----------
+function stopCapture() {
+  if (state.cap) state.cap.getTracks().forEach(t => t.stop());
+  state.cap = null;
+  $('#exvideo').srcObject = null;
+}
+
+function exGo() {
+  const t = exTarget($('#exurl').value);
+  if (t.err) { flash(t.err); return; }
+  stopCapture();
+  state.ex = t;
+  state.exUrl = $('#exurl').value.trim();
+  store.set('exurl', state.exUrl);
+  renderEx();
+}
+
+async function exCapture() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    flash('このブラウザでは「ミラー」が使えません（パソコンの Chrome・Edge・Firefox で https のページから使えます）');
+    return;
+  }
+  let s;
+  try {
+    s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false });
+  } catch (e) {
+    if (e.name !== 'NotAllowedError') flash('画面を映せませんでした: ' + e.message);
+    return;
+  }
+  stopCapture();
+  state.ex = null;          // URL表示はやめる（URL自体は入力欄に残る）
+  state.cap = s;
+  $('#exvideo').srcObject = s;
+  // ブラウザ側の「共有を停止」で止められたとき
+  s.getVideoTracks()[0].addEventListener('ended', () => {
+    if (state.cap === s) { stopCapture(); renderEx(); }
+  });
+  renderEx();
+}
+
+function exStop() {
+  stopCapture();
+  state.ex = null;
+  renderEx();
+}
+
+// ---------- 初期表示 ----------
+if (location.protocol === 'file:') document.body.classList.add('isfile');
+if (store.get('barhidden', false)) document.body.classList.add('barhidden');
+$('#ch').value = state.ch;
+$('#yt').value = state.yt ? `https://www.youtube.com/watch?v=${state.yt}` : '';
+$('#exurl').value = state.exUrl;
+if (state.exUrl) { const t = exTarget(state.exUrl); if (!t.err) state.ex = t; }
+renderSources();
+renderEx();
+renderLayout();
+
+// ---------- 操作 ----------
+// Enter か、入力欄から離れたときに反映
+['#ch', '#yt'].forEach(s => {
+  $(s).addEventListener('keydown', e => { if (e.key === 'Enter') apply(); });
+  $(s).addEventListener('change', apply);
+});
+
+// 映像ボタン: 押した方の映像に切り替え。表示中の方をもう一度押すと映像を隠す
+document.querySelectorAll('.vbtn').forEach(b => b.onclick = () => {
+  const v = b.dataset.v;
+  if (state.show.player && effPlayer() === v) {
+    state.show.player = false;
+    if (!Object.values(state.show).some(Boolean)) state.show.player = true;
+  } else {
+    state.show.player = true;
+    state.player = v;
+    if (v === 'youtube' && !state.yt) flash('YouTube の配信URLを入れると映像が出ます');
+    if (v === 'twitch' && !state.ch) flash('Twitch のチャンネル名を入れると映像が出ます');
+  }
+  store.set('show', state.show);
+  store.set('player', state.player);
+  history.replaceState(null, '', urlParams());
+  renderLayout();
+  renderSources();
+});
+
+$('#exurl').addEventListener('change', () => { if ($('#exurl').value.trim()) exGo(); });
+$('#exurl').addEventListener('keydown', e => { if (e.key === 'Enter') exGo(); });
+$('#excap').onclick = exCapture;
+$('#exstop').onclick = exStop;
+$('#exfit').onchange = e => $('#exvideo').style.objectFit = e.target.value;
+
+document.querySelectorAll('.toggle').forEach(b => b.onclick = () => {
+  const k = b.dataset.k;
+  state.show[k] = !state.show[k];
+  if (!Object.values(state.show).some(Boolean)) state.show[k] = true; // 全部は消さない
+  if (k === 'ex' && !state.show.ex) stopCapture();                   // 隠したら画面共有も止める
+  if (k === 'ex' && state.show.ex && !state.ex && state.exUrl) {
+    const t = exTarget(state.exUrl); if (!t.err) state.ex = t;
+  }
+  store.set('show', state.show);
+  renderLayout();
+  renderSources();
+  renderEx();
+});
+
+$('#hidebar').onclick = () => { document.body.classList.add('barhidden'); store.set('barhidden', true); };
+$('#showbar').onclick = () => { document.body.classList.remove('barhidden'); store.set('barhidden', false); };
+
+$('#openhelp').onclick = () => $('#help').showModal();
+$('#closehelp').onclick = () => $('#help').close();
+$('#help').addEventListener('click', e => { if (e.target === $('#help')) $('#help').close(); });
+
+// ---------- 区切り線のドラッグ ----------
+function dragger(el, onStart, onMove, onEnd) {
+  el.addEventListener('pointerdown', e => {
+    const ctx = onStart(e);
+    el.setPointerCapture(e.pointerId);
+    el.classList.add('drag');
+    document.body.classList.add('dragging');
+    const move = ev => onMove(ctx, ev);
+    const up = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      el.classList.remove('drag');
+      document.body.classList.remove('dragging');
+      onEnd(ctx);
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  });
+}
+
+// 縦線: 右側のコメント欄の幅を変える
+document.querySelectorAll('.vsplit').forEach(sp => {
+  const k = sp.dataset.k, p = pane(k);
+  dragger(sp,
+    e => ({ x: e.clientX, w: p.getBoundingClientRect().width }),
+    (c, ev) => {
+      const w = Math.max(MIN_W, Math.min(window.innerWidth - MIN_W, c.w - (ev.clientX - c.x)));
+      p.style.width = w + 'px';
+      state.w[k] = Math.round(w);
+    },
+    () => store.set('w', state.w));
+});
+
+// 横線: EX枠の高さを変える
+dragger($('#hsplit'),
+  e => ({ y: e.clientY, h: pane('ex').getBoundingClientRect().height, col: $('#colmain').getBoundingClientRect().height }),
+  (c, ev) => {
+    const h = Math.max(MIN_H, Math.min(c.col - MIN_H, c.h - (ev.clientY - c.y)));
+    pane('ex').style.height = h + 'px';
+    state.h.ex = Math.round(h);
+  },
+  () => store.set('h', state.h));
+</script>
+</body>
+</html>
